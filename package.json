@@ -1,0 +1,26 @@
+{
+  "name": "wildlife-offence-detection-system",
+  "version": "1.0.0",
+  "description": "AI-powered Wildlife Offence Detection and Reporting System",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "server": "cd backend && python app.py",
+    "client": "cd frontend && npm start",
+    "install-all": "npm install && cd frontend && npm install && cd ../backend && pip install -r requirements.txt"
+  },
+  "keywords": [
+    "wildlife",
+    "offence",
+    "detection",
+    "ai",
+    "react",
+    "flask",
+    "mongodb"
+  ],
+  "author": "Wildlife Protection System",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
