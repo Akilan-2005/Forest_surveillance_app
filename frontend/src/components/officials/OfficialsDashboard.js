@@ -120,26 +120,37 @@ const OfficialsDashboard = () => {
         toast.loading('Running YOLO detection...', { id: 'detection' });
 
         try {
-            // Call the YOLO detection endpoint
-            const response = await axios.post('/api/yolo/detect', {
-                image_data: report.media_data
+            // Convert base64 to blob for multipart upload
+            const base64Data = report.media_data.split(',')[1];
+            const byteCharacters = atob(base64Data);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const blob = new Blob([byteArray], { type: 'image/jpeg' });
+            
+            // Create form data
+            const formData = new FormData();
+            formData.append('file', blob, 'image.jpg');
+
+            // Call the FastAPI YOLO detection endpoint
+            const response = await axios.post('http://localhost:8000/detect', formData, {
+                headers: {
+                    'Content-Type': 'multipart/form-data'
+                }
             });
 
-            if (response.data.success) {
-                // Update the report with new detections
-                const updatedReport = {
-                    ...report,
-                    yolo_detections: response.data.detections
-                };
-                setViewingReport(updatedReport);
-                toast.success(`Detected ${response.data.detections.length} objects`, { id: 'detection' });
-            } else {
-                toast.error(response.data.message || 'Detection failed', { id: 'detection' });
-                setViewingReport(report);
-            }
+            // Update the report with new detections from FastAPI
+            const updatedReport = {
+                ...report,
+                yolo_detections: response.data.detections
+            };
+            setViewingReport(updatedReport);
+            toast.success(`Detected ${response.data.detections.length} objects`, { id: 'detection' });
         } catch (error) {
             console.error('Detection error:', error);
-            toast.error('Failed to run detection', { id: 'detection' });
+            toast.error('Failed to run detection. Is the FastAPI backend running on port 8000?', { id: 'detection' });
             // Still show the report even if detection fails
             setViewingReport(report);
         } finally {
