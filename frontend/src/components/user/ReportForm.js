@@ -20,30 +20,72 @@ const ReportForm = () => {
     // Geolocation availability and fetch via browser API
     const [isGeolocationAvailable, setIsGeolocationAvailable] = useState(false);
     const [isLocating, setIsLocating] = useState(false);
+    const [locationError, setLocationError] = useState(null);
+    const [locationAccuracy, setLocationAccuracy] = useState(null);
 
     useEffect(() => {
         const hasGeo = typeof navigator !== 'undefined' && 'geolocation' in navigator;
         setIsGeolocationAvailable(hasGeo);
-        if (!hasGeo) return;
+        if (!hasGeo) {
+            setLocationError('Geolocation is not supported by your browser');
+            return;
+        }
 
+        // Get high-accuracy location
         setIsLocating(true);
+        setLocationError(null);
+        
+        const options = {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 0
+        };
+
         navigator.geolocation.getCurrentPosition(
             (pos) => {
-                setLocation({
+                const locationData = {
                     lat: pos.coords.latitude,
                     lng: pos.coords.longitude,
-                });
+                    accuracy: pos.coords.accuracy,
+                    altitude: pos.coords.altitude,
+                    altitudeAccuracy: pos.coords.altitudeAccuracy,
+                    heading: pos.coords.heading,
+                    speed: pos.coords.speed,
+                    timestamp: pos.timestamp
+                };
+                
+                setLocation(locationData);
+                setLocationAccuracy(pos.coords.accuracy);
                 setIsLocating(false);
+                console.log('Location captured:', locationData);
             },
-            () => {
-                // Permission denied or unavailable
+            (error) => {
+                console.error('Geolocation error:', error);
                 setIsLocating(false);
+                
+                let errorMessage = 'Unable to get your location';
+                switch (error.code) {
+                    case error.PERMISSION_DENIED:
+                        errorMessage = 'Location permission denied. Please enable location access.';
+                        break;
+                    case error.POSITION_UNAVAILABLE:
+                        errorMessage = 'Location information is unavailable.';
+                        break;
+                    case error.TIMEOUT:
+                        errorMessage = 'Location request timed out.';
+                        break;
+                    default:
+                        errorMessage = 'An unknown error occurred.';
+                        break;
+                }
+                setLocationError(errorMessage);
             },
-            { enableHighAccuracy: true, timeout: 5000 }
+            options
         );
     }, []);
 
     const offenceTypes = [
+        'Species Monitoring',
         'Poaching',
         'Illegal Hunting',
         'Tree Cutting',
@@ -53,6 +95,54 @@ const ReportForm = () => {
         'Illegal Forest Entry',
         'Other'
     ];
+
+    const detectionModeInfo = {
+        'Species Monitoring': {
+            description: 'Detect wildlife species only (lion, tiger, elephant, rhino, bear, deer, zebra, cow, cat, dog, horse, birds)',
+            icon: '🦁',
+            color: 'green'
+        },
+        'Poaching': {
+            description: 'Detect poachers, weapons, and suspicious activities',
+            icon: '🚨',
+            color: 'red'
+        },
+        'Illegal Hunting': {
+            description: 'Detect hunters, weapons, and illegal hunting equipment',
+            icon: '🔫',
+            color: 'orange'
+        },
+        'Illegal Forest Entry': {
+            description: 'Detect unauthorized persons and vehicles in protected areas',
+            icon: '🚷',
+            color: 'red'
+        },
+        'Tree Cutting': {
+            description: 'Detect illegal logging and deforestation activities',
+            icon: '🪓',
+            color: 'orange'
+        },
+        'Injured Animal': {
+            description: 'Document injured wildlife for rescue operations',
+            icon: '🏥',
+            color: 'yellow'
+        },
+        'Animal Accident': {
+            description: 'Report wildlife accidents and roadkill incidents',
+            icon: '🚗',
+            color: 'yellow'
+        },
+        'Diseased Wildlife': {
+            description: 'Report sick or diseased animals for medical intervention',
+            icon: '🦠',
+            color: 'yellow'
+        },
+        'Other': {
+            description: 'Other wildlife-related incidents',
+            icon: '📋',
+            color: 'gray'
+        }
+    };
 
     const handleChange = (e) => {
         setFormData({
@@ -118,10 +208,16 @@ const ReportForm = () => {
         try {
             const reportData = {
                 ...formData,
-                location: location || { lat: 0, lng: 0, address: 'Location not available' }
+                location: location || { 
+                    lat: 0, 
+                    lng: 0, 
+                    address: 'Location not available',
+                    accuracy: null,
+                    timestamp: null
+                }
             };
 
-            console.log('Submitting report:', reportData);
+            console.log('Submitting report with enhanced location:', reportData);
             const apiBase = process.env.REACT_APP_API_URL || 'http://localhost:5000';
             const token = localStorage.getItem('token');
             const response = await axios.post(`${apiBase}/api/reports`, reportData, {
@@ -132,7 +228,7 @@ const ReportForm = () => {
                 timeout: 30000 // 30 second timeout
             });
 
-            if (response.status === 201) {
+            if (response.status === 200 || response.status === 201) {
                 toast.success('Report submitted successfully!', { id: 'report-submit-success' });
                 console.log('Report submitted:', response.data);
                 navigate('/');
@@ -195,7 +291,7 @@ const ReportForm = () => {
                         {/* Offence Type */}
                         <div>
                             <label htmlFor="offence_type" className="block text-sm font-medium text-gray-700">
-                                Offence Type *
+                                Monitoring Mode *
                             </label>
                             <select
                                 name="offence_type"
@@ -205,11 +301,34 @@ const ReportForm = () => {
                                 value={formData.offence_type}
                                 onChange={handleChange}
                             >
-                                <option value="">Select offence type</option>
+                                <option value="">Select monitoring mode</option>
                                 {offenceTypes.map(type => (
-                                    <option key={type} value={type}>{type}</option>
+                                    <option key={type} value={type}>
+                                        {detectionModeInfo[type]?.icon || '📋'} {type}
+                                    </option>
                                 ))}
                             </select>
+                            {formData.offence_type && detectionModeInfo[formData.offence_type] && (
+                                <div className={`mt-2 p-3 rounded-lg border ${
+                                    formData.offence_type === 'Species Monitoring' 
+                                        ? 'bg-green-50 border-green-200' 
+                                        : 'bg-red-50 border-red-200'
+                                }`}>
+                                    <div className="flex items-start">
+                                        <span className="text-2xl mr-3">
+                                            {detectionModeInfo[formData.offence_type].icon}
+                                        </span>
+                                        <div>
+                                            <h4 className="text-sm font-medium text-gray-900 mb-1">
+                                                {formData.offence_type}
+                                            </h4>
+                                            <p className="text-xs text-gray-600">
+                                                {detectionModeInfo[formData.offence_type].description}
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
                         {/* Description */}
@@ -272,25 +391,66 @@ const ReportForm = () => {
                         </div>
 
                         {/* Location Info */}
-                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <div className={`border rounded-lg p-4 ${
+                            locationError ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'
+                        }`}>
                             <div className="flex items-start">
                                 <div className="flex-shrink-0">
-                                    <span className="text-blue-600 text-lg">📍</span>
+                                    <span className={locationError ? 'text-red-600' : 'text-blue-600'} style={{ fontSize: '1.125rem' }}>📍</span>
                                 </div>
-                                <div className="ml-3">
-                                    <h3 className="text-sm font-medium text-blue-900">Location Tracking</h3>
-                                    <div className="mt-2 text-sm text-blue-700">
+                                <div className="ml-3 flex-1">
+                                    <h3 className={`text-sm font-medium ${locationError ? 'text-red-900' : 'text-blue-900'}`}>
+                                        GPS Location Tracking
+                                    </h3>
+                                    <div className="mt-2 text-sm">
                                         {location ? (
                                             <div>
-                                                <p>✅ Location captured automatically</p>
-                                                <p className="text-xs mt-1">
-                                                    Lat: {location.lat.toFixed(6)}, Lng: {location.lng.toFixed(6)}
-                                                </p>
+                                                <div className="flex items-center text-green-700 mb-1">
+                                                    <span className="mr-2">✅</span>
+                                                    <span className="font-medium">Location captured successfully</span>
+                                                </div>
+                                                <div className="space-y-1 text-xs text-green-600">
+                                                    <p>Latitude: {location.lat.toFixed(6)}°</p>
+                                                    <p>Longitude: {location.lng.toFixed(6)}°</p>
+                                                    {location.accuracy && (
+                                                        <p>Accuracy: ±{location.accuracy.toFixed(0)} meters</p>
+                                                    )}
+                                                    {location.altitude && (
+                                                        <p>Altitude: {location.altitude.toFixed(1)}m</p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ) : locationError ? (
+                                            <div className="text-red-700">
+                                                <div className="flex items-center mb-1">
+                                                    <span className="mr-2">❌</span>
+                                                    <span className="font-medium">Location Error</span>
+                                                </div>
+                                                <p className="text-xs">{locationError}</p>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => window.location.reload()}
+                                                    className="mt-2 text-xs bg-red-100 hover:bg-red-200 text-red-800 px-2 py-1 rounded"
+                                                >
+                                                    Retry Location
+                                                </button>
                                             </div>
                                         ) : isGeolocationAvailable ? (
-                                            <p>⏳ {isLocating ? 'Getting your location...' : 'Location permission not granted yet.'}</p>
+                                            <div className="text-blue-700">
+                                                <div className="flex items-center">
+                                                    <span className="mr-2">⏳</span>
+                                                    <span>{isLocating ? 'Getting precise GPS location...' : 'Waiting for location permission...'}</span>
+                                                </div>
+                                                <p className="text-xs mt-1">This may take a few seconds for high accuracy</p>
+                                            </div>
                                         ) : (
-                                            <p>❌ Location access not available. Please enable location services.</p>
+                                            <div className="text-red-700">
+                                                <div className="flex items-center mb-1">
+                                                    <span className="mr-2">❌</span>
+                                                    <span className="font-medium">Location Not Available</span>
+                                                </div>
+                                                <p className="text-xs">Your browser doesn't support geolocation or location services are disabled.</p>
+                                            </div>
                                         )}
                                     </div>
                                 </div>

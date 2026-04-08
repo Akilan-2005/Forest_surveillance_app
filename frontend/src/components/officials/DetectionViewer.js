@@ -28,17 +28,12 @@ const DetectionViewer = ({
     const [selectedDetection, setSelectedDetection] = useState(null);
     const [hoveredDetection, setHoveredDetection] = useState(null);
 
-    // Color palette for different classes
-    const getClassColor = (label, index) => {
-        const colors = [
-            '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8',
-            '#F7DC6F', '#BB8FCE', '#85C1E2', '#F8B739', '#52B788',
-            '#E74C3C', '#3498DB', '#2ECC71', '#F39C12', '#9B59B6',
-            '#1ABC9C', '#E91E63', '#FF5722', '#795548', '#607D8B'
-        ];
-        // Generate consistent color based on label hash or index
-        const hash = label.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-        return colors[hash % colors.length];
+    // Color palette based on threat level instead of random hash
+    const getThreatColor = (threat_level) => {
+        if (threat_level === 'CRITICAL') return '#FF0000'; // Red
+        if (threat_level === 'MEDIUM') return '#FFA500'; // Orange
+        if (threat_level === 'LOW') return '#FFFF00'; // Yellow
+        return '#00FF00'; // Green for Animal species / NONE
     };
 
     // Filter detections by confidence threshold
@@ -114,9 +109,9 @@ const DetectionViewer = ({
 
             // Draw bounding boxes
             sortedDetections.forEach((detection, index) => {
-                const { label, confidence, box } = detection;
+                const { label, confidence, box, threat_level = 'NONE' } = detection;
                 const [x1, y1, x2, y2] = box;
-                const color = getClassColor(label, index);
+                const color = getThreatColor(threat_level);
                 const isHovered = hoveredDetection === index;
                 const isSelected = selectedDetection === index;
 
@@ -153,7 +148,8 @@ const DetectionViewer = ({
 
                 // Draw label background
                 if (showLabels) {
-                    const labelText = `${label} ${(confidence * 100).toFixed(0)}%`;
+                    const threatText = threat_level && threat_level !== 'NONE' ? `(${threat_level})` : '';
+                    const labelText = `${label} - ${(confidence * 100).toFixed(0)}% ${threatText}`.trim();
                     ctx.font = 'bold 12px Arial, sans-serif';
                     const textMetrics = ctx.measureText(labelText);
                     const textWidth = textMetrics.width;
@@ -296,8 +292,8 @@ const DetectionViewer = ({
                     </h4>
                     <div className="space-y-2 max-h-48 overflow-y-auto">
                         {sortedDetections.map((detection, index) => {
-                            const { label, confidence, box } = detection;
-                            const color = getClassColor(label, index);
+                            const { label, confidence, box, threat_level = 'NONE' } = detection;
+                            const color = getThreatColor(threat_level);
                             const isSelected = selectedDetection === index;
                             const isHovered = hoveredDetection === index;
 
@@ -323,7 +319,7 @@ const DetectionViewer = ({
                                         {/* Label and confidence */}
                                         <div>
                                             <p className="font-medium text-gray-900 capitalize">
-                                                {label}
+                                                {label} {threat_level !== 'NONE' && <span className="text-xs ml-2 font-bold" style={{color}}>[{threat_level}]</span>}
                                             </p>
                                             <p className="text-sm text-gray-500">
                                                 Box: [{box.join(', ')}]

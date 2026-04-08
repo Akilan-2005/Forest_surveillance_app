@@ -14,3 +14,10 @@ geopy==2.3.0
 twilio==8.5.0
 opencv-python==4.8.1.78
 numpy==1.24.3
+fastapi==0.104.1
+uvicorn==0.24.0
+ultralytics==8.0.235
+pyyaml==6.0.1
+scipy==1.11.4
+torch==2.1.1
+torchvision==0.16.1

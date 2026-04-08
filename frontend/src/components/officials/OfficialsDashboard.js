@@ -6,7 +6,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import io from 'socket.io-client';
 import NotificationCenter from '../common/NotificationCenter';
-import DetectionViewer from './DetectionViewer';
+import EnhancedDetectionViewer from '../user/EnhancedDetectionViewer';
 
 // Fix for default markers in react-leaflet
 delete L.Icon.Default.prototype._getIconUrl;
@@ -22,6 +22,10 @@ const OfficialsDashboard = () => {
     const [selectedStatus, setSelectedStatus] = useState('all');
     const [selectedReport, setSelectedReport] = useState(null);
     const [viewingReport, setViewingReport] = useState(null);  // For detection viewer modal
+    const [detectionMode, setDetectionMode] = useState('threat'); // 'species' or 'threat'
+    const [showAnnotations, setShowAnnotations] = useState(true);
+    const [showDetectionModal, setShowDetectionModal] = useState(false);
+    const [selectedReportForDetection, setSelectedReportForDetection] = useState(null);
     const [detectionLoading, setDetectionLoading] = useState(false);
     const [socket, setSocket] = useState(null);
     const [connectionStatus, setConnectionStatus] = useState('disconnected');
@@ -47,6 +51,15 @@ const OfficialsDashboard = () => {
         newSocket.on('disconnect', () => {
             console.log('Disconnected from server');
             setConnectionStatus('disconnected');
+        });
+
+        newSocket.on('critical_threat_alert', (data) => {
+            console.log('Critical threat alert received:', data);
+            toast.error(`🚨 CRITICAL THREAT ALERT: ${data.message}`, {
+                duration: 10000,
+                icon: '🚨'
+            });
+            fetchReports(); // Refresh reports
         });
 
         newSocket.on('new_report', (data) => {
@@ -101,22 +114,26 @@ const OfficialsDashboard = () => {
             fetchReports();
             setSelectedReport(null);
         } catch (error) {
+            console.error('Status update error:', error);
             toast.error('Failed to update status', { id: 'status-update-error' });
         }
     };
 
-    const runDetection = async (report) => {
+    const runDetection = async (report, forceMode = null) => {
         if (!report.media_data) {
             toast.error('No image available for detection', { id: 'detection-error-no-image' });
             return;
         }
 
+        const modeToUse = forceMode || report.offence_type || 'Threat Monitoring';
+        setDetectionMode(modeToUse === 'Species Monitoring' ? 'Species Monitoring' : 'Threat Monitoring');
+
         setDetectionLoading(true);
-        toast.loading('Running YOLO detection...', { id: 'detection' });
+        toast.loading(`Running ${modeToUse === 'Species Monitoring' ? 'Species' : 'Threat'} detection...`, { id: 'detection' });
 
         try {
             // Convert base64 to blob for multipart upload
-            const base64Data = report.media_data.split(',')[1];
+            const base64Data = report.media_data.split(',')[1] || report.media_data;
             const byteCharacters = atob(base64Data);
             const byteNumbers = new Array(byteCharacters.length);
             for (let i = 0; i < byteCharacters.length; i++) {
@@ -128,29 +145,72 @@ const OfficialsDashboard = () => {
             // Create form data
             const formData = new FormData();
             formData.append('file', blob, 'image.jpg');
+            // Pass the selected detection mode back to the backend
+            formData.append('offence_type', modeToUse);
 
-            // Call the FastAPI YOLO detection endpoint
+            // Call the FastAPI YOLO detection endpoint with timeout
             const response = await axios.post('http://localhost:8000/detect', formData, {
                 headers: {
                     'Content-Type': 'multipart/form-data'
-                }
+                },
+                timeout: 60000 // 60 second timeout for detection
             });
+
+            // Trigger alerts for high-threat detections
+            const detections = response.data.detections || [];
+            const criticalThreats = detections.filter(d => d.threat_level === 'CRITICAL');
+            if (criticalThreats.length > 0) {
+                toast.error(`ALERT: ${criticalThreats.length} CRITICAL threat(s) detected!`, { duration: 5000, icon: '🚨' });
+            }
 
             // Update the report with new detections from FastAPI
             const updatedReport = {
                 ...report,
-                yolo_detections: response.data.detections
+                yolo_detections: detections
             };
             setViewingReport(updatedReport);
-            toast.success(`Detected ${response.data.detections.length} objects`, { id: 'detection' });
+            toast.success(`Detected ${detections.length} objects`, { id: 'detection' });
         } catch (error) {
             console.error('Detection error:', error);
-            toast.error('Failed to run detection. Is the FastAPI backend running on port 8000?', { id: 'detection' });
+            
+            let errorMessage = 'Failed to run detection';
+            
+            if (error.code === 'ECONNABORTED') {
+                errorMessage = 'Detection timeout - model is processing. Please try again.';
+            } else if (error.response?.status === 503) {
+                errorMessage = 'Detection model not initialized. Backend may still be starting up. Please wait a moment and try again.';
+            } else if (error.response?.status === 500) {
+                errorMessage = `Detection error: ${error.response.data?.detail || 'Internal server error'}`;
+            } else if (error.response?.status === 400) {
+                errorMessage = `Invalid request: ${error.response.data?.detail || 'Bad request'}`;
+            } else if (error.code === 'ERR_NETWORK' || !error.response) {
+                errorMessage = 'Cannot connect to detection service. Is the FastAPI backend running on port 8000? Run: uvicorn api_yolo:app --reload --host 0.0.0.0 --port 8000';
+            }
+            
+            toast.error(errorMessage, { id: 'detection', duration: 4000 });
             // Still show the report even if detection fails
             setViewingReport(report);
         } finally {
             setDetectionLoading(false);
         }
+    };
+
+    const handleDetectionAnalysis = (report) => {
+        setSelectedReportForDetection(report);
+        setShowDetectionModal(true);
+        // Set detection mode based on report's stored detection mode or offence type
+        if (report.detection_mode) {
+            setDetectionMode(report.detection_mode);
+        } else if (report.offence_type === 'Species Monitoring') {
+            setDetectionMode('species');
+        } else {
+            setDetectionMode('threat');
+        }
+    };
+
+    const handleDetectionModeChange = (mode, detections) => {
+        setDetectionMode(mode);
+        console.log(`Detection mode changed to: ${mode}, found ${detections.length} objects`);
     };
 
     const getSeverityColor = (severity) => {
@@ -307,11 +367,13 @@ const OfficialsDashboard = () => {
 
                     {/* Map */}
                     <div className="p-6">
-                        <h4 className="text-lg font-medium text-gray-900 mb-4">Report Locations</h4>
+                        <h4 className="text-lg font-medium text-gray-900 mb-4">Report Locations Map</h4>
                         <div className="h-96 rounded-lg overflow-hidden">
                             <MapContainer
-                                center={[20.5937, 78.9629]} // India center
-                                zoom={6}
+                                center={reports.length > 0 && reports[0].location?.lat && reports[0].location?.lng 
+                                    ? [reports[0].location.lat, reports[0].location.lng] 
+                                    : [20.5937, 78.9629]}
+                                zoom={reports.length > 0 ? 8 : 6}
                                 style={{ height: '100%', width: '100%', zIndex: 0 }}
                             >
                                 <TileLayer
@@ -319,14 +381,18 @@ const OfficialsDashboard = () => {
                                     attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                                 />
                                 {reports.map((report) => {
-                                    if (!report.location?.lat || !report.location?.lng) return null;
+                                    if (!report.location?.lat || !report.location?.lng || 
+                                        report.location.lat === 0 || report.location.lng === 0) return null;
 
                                     const markerColor = getMarkerColor(report.severity);
+                                    const iconSize = report.severity === 'Critical' ? 25 : 
+                                                   report.severity === 'Medium' ? 20 : 15;
+                                    
                                     const customIcon = new L.DivIcon({
                                         className: 'custom-div-icon',
-                                        html: `<div style="background-color: ${markerColor}; width: 20px; height: 20px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`,
-                                        iconSize: [20, 20],
-                                        iconAnchor: [10, 10]
+                                        html: `<div style="background-color: ${markerColor}; width: ${iconSize}px; height: ${iconSize}px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 8px;">${report.severity[0]}</div>`,
+                                        iconSize: [iconSize, iconSize],
+                                        iconAnchor: [iconSize/2, iconSize/2]
                                     });
 
                                     return (
@@ -338,17 +404,57 @@ const OfficialsDashboard = () => {
                                                 click: () => setSelectedReport(report)
                                             }}
                                         >
-                                            <Popup>
-                                                <div className="p-2">
-                                                    <h3 className="font-medium text-gray-900">{report.title}</h3>
-                                                    <p className="text-sm text-gray-600">{report.offence_type}</p>
-                                                    <p className="text-xs text-gray-500">{report.location.address}</p>
+                                            <Popup maxWidth={300}>
+                                                <div className="p-3">
+                                                    <div className="flex items-center justify-between mb-2">
+                                                        <h4 className="font-medium text-gray-900">{report.title}</h4>
+                                                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${getSeverityColor(report.severity)}`}>
+                                                            {report.severity}
+                                                        </span>
+                                                    </div>
+                                                    <div className="space-y-2 text-sm">
+                                                        <p><strong>Offence Type:</strong> {report.offence_type}</p>
+                                                        <p><strong>Reported by:</strong> {report.user_name}</p>
+                                                        <p><strong>Location:</strong> {report.location.address}</p>
+                                                        <p><strong>Coordinates:</strong> {report.location.lat.toFixed(6)}, {report.location.lng.toFixed(6)}</p>
+                                                        {report.location.accuracy && (
+                                                            <p><strong>GPS Accuracy:</strong> ±{report.location.accuracy.toFixed(0)}m</p>
+                                                        )}
+                                                        <p><strong>Date:</strong> {new Date(report.created_at).toLocaleDateString()}</p>
+                                                        <p><strong>Time:</strong> {new Date(report.created_at).toLocaleTimeString()}</p>
+                                                        <div className="flex items-center space-x-2">
+                                                            <span className="text-xs font-medium text-gray-700">Status:</span>
+                                                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${getStatusColor(report.status)}`}>
+                                                                {report.status}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                    <button
+                                                        onClick={() => setSelectedReport(report)}
+                                                        className="mt-3 w-full px-3 py-1 text-sm font-medium text-blue-600 hover:text-blue-700 border border-blue-300 rounded-md hover:bg-blue-50"
+                                                    >
+                                                        View Details & Update Status
+                                                    </button>
                                                 </div>
                                             </Popup>
                                         </Marker>
                                     );
                                 })}
                             </MapContainer>
+                        </div>
+                        <div className="mt-4 flex items-center justify-center space-x-6 text-xs text-gray-600">
+                            <div className="flex items-center">
+                                <div className="w-3 h-3 bg-red-500 rounded-full mr-2"></div>
+                                <span>Critical</span>
+                            </div>
+                            <div className="flex items-center">
+                                <div className="w-3 h-3 bg-orange-500 rounded-full mr-2"></div>
+                                <span>Medium</span>
+                            </div>
+                            <div className="flex items-center">
+                                <div className="w-3 h-3 bg-green-500 rounded-full mr-2"></div>
+                                <span>Low</span>
+                            </div>
                         </div>
                     </div>
 
@@ -446,6 +552,37 @@ const OfficialsDashboard = () => {
                                                     >
                                                         View Detection Details & Bounding Boxes →
                                                     </button>
+                                                    <div className="mt-4">
+                                                        <div className="flex items-center justify-between mb-4">
+                                                            <h3 className="text-lg font-medium text-gray-900">Detection Results</h3>
+                                                            <div className="flex items-center space-x-2">
+                                                                <div className="text-sm text-gray-600">
+                                                                    Mode: <span className={`font-medium ${
+                                                                        mode === 'species' ? 'text-green-600' : 'text-red-600'
+                                                                    }`}>
+                                                                        {mode === 'species' ? '🦁 Species Monitoring' : '🚨 Threat Monitoring'}
+                                                                    </span>
+                                                                </div>
+                                                                <button
+                                                                    onClick={() => setShowAnnotations(!showAnnotations)}
+                                                                    className={`px-3 py-1 rounded-md text-sm font-medium ${
+                                                                        showAnnotations
+                                                                            ? 'bg-blue-100 text-blue-700'
+                                                                            : 'bg-gray-100 text-gray-700'
+                                                                    }`}
+                                                                >
+                                                                    {showAnnotations ? 'Hide Boxes' : 'Show Boxes'}
+                                                                </button>
+                                                                <button
+                                                                    onClick={runDetection}
+                                                                    disabled={loading}
+                                                                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+                                                                >
+                                                                    {loading ? 'Detecting...' : 'Re-run Detection'}
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
                                                 </div>
                                             )}
                                         </div>
@@ -546,14 +683,32 @@ const OfficialsDashboard = () => {
                                     </button>
                                 </div>
 
+                                {/* Detection Mode Switcher */}
+                                <div className="flex items-center space-x-4 mb-4 bg-gray-50 p-3 rounded-lg border border-gray-200">
+                                    <label className="text-sm font-medium text-gray-700">Detection Mode:</label>
+                                    <select
+                                        value={detectionMode}
+                                        onChange={(e) => setDetectionMode(e.target.value)}
+                                        className="px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-primary-500 font-medium"
+                                    >
+                                        <option value="Species Monitoring">Species Monitoring (Animals Only)</option>
+                                        <option value="Threat Monitoring">Threat Monitoring (Weapons/Poachers)</option>
+                                    </select>
+                                    <button
+                                        onClick={() => runDetection(viewingReport, detectionMode)}
+                                        disabled={detectionLoading}
+                                        className="px-4 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 disabled:opacity-50 transition-colors shadow-sm"
+                                    >
+                                        {detectionLoading ? 'Detecting...' : 'Re-run Detection'}
+                                    </button>
+                                </div>
+
                                 {/* Detection Viewer */}
                                 {viewingReport.media_data && (
-                                    <DetectionViewer
+                                    <EnhancedDetectionViewer
                                         imageUrl={viewingReport.media_data}
-                                        detections={viewingReport.yolo_detections || []}
-                                        maxWidth={800}
-                                        showLabels={true}
-                                        confidenceThreshold={0.25}
+                                        report={viewingReport}
+                                        onModeChange={handleDetectionModeChange}
                                     />
                                 )}
 
@@ -599,6 +754,42 @@ const OfficialsDashboard = () => {
                                         Close
                                     </button>
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Enhanced Detection Modal */}
+                {showDetectionModal && selectedReportForDetection && (
+                    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+                        <div className="relative top-20 mx-auto p-5 border w-11/12 shadow-lg rounded-md bg-white max-h-screen overflow-y-auto">
+                            <div className="mt-3 text-center">
+                                <h3 className="text-lg font-medium text-gray-900 mb-2">
+                                    Enhanced Detection Analysis
+                                </h3>
+                                <p className="text-sm text-gray-600 mb-4">
+                                    Report: {selectedReportForDetection.title}
+                                </p>
+                            </div>
+
+                            <div className="mt-4">
+                                <EnhancedDetectionViewer
+                                    imageUrl={selectedReportForDetection.media_data}
+                                    report={selectedReportForDetection}
+                                    onModeChange={handleDetectionModeChange}
+                                />
+                            </div>
+
+                            <div className="flex justify-end space-x-3 mt-6">
+                                <button
+                                    onClick={() => {
+                                        setShowDetectionModal(false);
+                                        setSelectedReportForDetection(null);
+                                    }}
+                                    className="px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 transition-colors"
+                                >
+                                    Close
+                                </button>
                             </div>
                         </div>
                     </div>

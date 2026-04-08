@@ -138,11 +138,8 @@ class YOLOService:
         try:
             if not self.yaml_file_path.exists():
                 logger.warning(f"YAML file not found: {self.yaml_file_path}")
-                # Use default classes
-                self.class_names = {
-                    0: 'exit', 1: 'fireextinguisher', 2: 'chair', 3: 'clock',
-                    4: 'trashbin', 5: 'screen', 6: 'printer'
-                }
+                # Use empty dictionary so we fallback to the model's built-in names (e.g., COCO names)
+                self.class_names = {}
                 return
             
             with open(self.yaml_file_path, 'r') as f:

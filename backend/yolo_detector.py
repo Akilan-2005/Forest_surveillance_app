@@ -377,14 +377,29 @@ class YOLOv3WildlifeDetector:
         # Determine overall confidence
         if detections:
             confidence = max([d['confidence'] for d in detections])
-        
+            
+        # If no specific recognized offence is picked up but an offence was reported
+        if not offence_detected and confidence == 0.0:
+            offence_detected = True
+            offence_type = "reported_offence"
+            severity = "Medium"
+            analysis_description = "Reported offence under investigation. "
+            
+        # Adjust Severity based on overall confidence of detections
+        if confidence >= 0.8:
+            severity = "Critical"
+        elif confidence >= 0.5:
+            severity = "Medium"
+        elif confidence > 0:
+            severity = "Low"
+            
         return {
             "offence_detected": offence_detected,
             "offence_type": offence_type,
             "severity": severity,
             "confidence": confidence,
             "detected_objects": detected_objects,
-            "description": analysis_description or "No specific offences detected"
+            "description": analysis_description or "Reported offence under investigation"
         }
     
     def get_fallback_analysis(self, description: str = "") -> Dict:

@@ -29,15 +29,15 @@ except ImportError as e:
     YOLO_AVAILABLE = False
     yolo_detector = None
 
-# Import YOLO service for object detection
+# Import Enhanced YOLO service for dual-mode detection
 try:
-    from yolo_service import get_yolo_service
-    YOLO_SERVICE_AVAILABLE = True
-    print("YOLO service available for object detection")
+    from enhanced_yolo_service import get_enhanced_yolo_service, DetectionMode, ThreatLevel
+    ENHANCED_YOLO_AVAILABLE = True
+    print("Enhanced YOLO service available for dual-mode detection")
 except ImportError as e:
-    print(f"YOLO service not available: {e}")
-    YOLO_SERVICE_AVAILABLE = False
-    yolo_service = None
+    print(f"Enhanced YOLO service not available: {e}")
+    ENHANCED_YOLO_AVAILABLE = False
+    enhanced_yolo_service = None
 
 # Load environment variables
 load_dotenv()
@@ -67,19 +67,34 @@ mail = Mail(app)
 # YOLOv3 AI configuration (no API key needed)
 print("Initializing YOLOv3 wildlife offence detector...")
 
-# Initialize YOLO service for object detection
-yolo_service = None
-if YOLO_SERVICE_AVAILABLE:
+# Initialize Enhanced YOLO service for dual-mode detection
+enhanced_yolo_service = None
+detection_mode = None  # Initialize detection_mode variable
+
+if ENHANCED_YOLO_AVAILABLE:
     try:
-        yolo_service = get_yolo_service()
-        if yolo_service.is_initialized():
-            print(f"YOLO service initialized successfully (fallback: {yolo_service.fallback_mode})")
+        print("★ Attempting to initialize Enhanced YOLO service...")
+        enhanced_yolo_service = get_enhanced_yolo_service()
+        
+        # CRITICAL: Call initialize() to load models
+        if enhanced_yolo_service.initialize():
+            status = enhanced_yolo_service.get_initialization_status()
+            print(f"✓ Enhanced YOLO service initialized successfully")
+            print(f"  - Species model loaded: {status['species_model_loaded']}")
+            print(f"  - Threat model loaded: {status['threat_model_loaded']}")
+            print(f"  - Fallback mode: {status['fallback_mode']}")
         else:
-            print("YOLO service failed to initialize")
-            yolo_service = None
+            status = enhanced_yolo_service.get_initialization_status()
+            print(f"✗ Enhanced YOLO service failed to initialize")
+            print(f"  Error: {status['error']}")
+            enhanced_yolo_service = None
     except Exception as e:
-        print(f"Error initializing YOLO service: {e}")
-        yolo_service = None
+        print(f"✗ Error initializing enhanced YOLO service: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        enhanced_yolo_service = None
+else:
+    print("✗ Enhanced YOLO service not available (ultralytics not installed)")
 
 # Twilio configuration (optional)
 twilio_client = None
@@ -159,6 +174,23 @@ def token_required(f):
         return f(current_user, *args, **kwargs)
     return decorated
 
+# Status endpoint (no auth required - for debugging)
+@app.route('/api/status', methods=['GET'])
+def get_status():
+    """Get backend service status and initialization details."""
+    status = {
+        'backend': 'running',
+        'enhanced_yolo': {
+            'available': enhanced_yolo_service is not None,
+            'initialized': enhanced_yolo_service.is_initialized() if enhanced_yolo_service else False
+        }
+    }
+    
+    if enhanced_yolo_service:
+        status['enhanced_yolo']['details'] = enhanced_yolo_service.get_initialization_status()
+    
+    return jsonify(status), 200
+
 # Authentication routes
 @app.route('/api/auth/register', methods=['POST'])
 def register():
@@ -211,7 +243,196 @@ def login():
         'user': user
     })
 
-# YOLO Object Detection endpoint
+# Enhanced Dual-Mode Detection endpoint
+@app.route('/api/detect/enhanced', methods=['POST'])
+@token_required
+def enhanced_detect_objects(current_user):
+    """
+    Enhanced dual-mode object detection endpoint.
+    
+    Supports two detection modes:
+    - species: Detect animal species only
+    - threat: Detect humans, weapons, and suspicious objects
+    
+    Expects:
+        - file: Image file (multipart/form-data) OR
+        - image_data: Base64 encoded image (JSON)
+        - mode: Detection mode ('species' or 'threat')
+    
+    Returns:
+        {
+            "success": true,
+            "mode": "species|threat",
+            "detections": [
+                {
+                    "label": "lion",
+                    "confidence": 0.87,
+                    "box": [x1, y1, x2, y2],
+                    "color": "#00FF00",
+                    "display_label": "lion - 87%",
+                    "threat_level": "LOW|MEDIUM|CRITICAL",
+                    "detection_type": "species|threat"
+                }
+            ],
+            "message": "Detected 2 objects"
+        }
+    """
+    try:
+        # Check if enhanced YOLO service is available
+        if not enhanced_yolo_service:
+            error_msg = "Enhanced detection service not initialized at startup. Check backend logs for initialization errors."
+            print(f"✗ ERROR: {error_msg}")
+            return jsonify({
+                'success': False,
+                'detections': [],
+                'message': error_msg
+            }), 503
+        
+        # If service exists but not initialized, try to diagnose and reinitialize if needed
+        if not enhanced_yolo_service.is_initialized():
+            status = enhanced_yolo_service.get_initialization_status()
+            
+            # Log detailed status for debugging
+            print(f"⚠️  Detection service not initialized on request:")
+            print(f"    - CV2 available: {status.get('cv2_available')}")
+            print(f"    - Ultralytics available: {status.get('ultralytics_available')}")
+            print(f"    - Species model loaded: {status.get('species_model_loaded')}")
+            print(f"    - Threat model loaded: {status.get('threat_model_loaded')}")
+            print(f"    - Error: {status.get('error')}")
+            
+            # Try to initialize if not already initialized
+            print("Attempting to initialize YOLO service on-demand...")
+            if enhanced_yolo_service.initialize():
+                print("✓ Successfully initialized on-demand!")
+                status = enhanced_yolo_service.get_initialization_status()
+            else:
+                # Still failed, return error with details
+                error_msg = f"Detection service failed to initialize. Error: {status.get('error', 'Unknown error')}"
+                print(f"✗ ERROR: {error_msg}")
+                return jsonify({
+                    'success': False,
+                    'detections': [],
+                    'message': error_msg,
+                    'debug': {
+                        'cv2_available': status.get('cv2_available'),
+                        'ultralytics_available': status.get('ultralytics_available'),
+                        'error_details': str(status.get('error'))
+                    }
+                }), 503
+        
+        # Get detection mode
+        mode = request.form.get('mode') or request.json.get('mode', 'species').lower()
+        if mode not in ['species', 'threat']:
+            return jsonify({
+                'success': False,
+                'message': 'Invalid mode. Must be "species" or "threat"'
+            }), 400
+        
+        detection_mode = DetectionMode.SPECIES if mode == 'species' else DetectionMode.THREAT
+        
+        # Get confidence threshold
+        conf_threshold = float(request.form.get('conf_threshold', 0.25))
+        
+        image_bytes = None
+        
+        # Check for multipart file upload
+        if 'file' in request.files:
+            file = request.files['file']
+            if file.filename == '':
+                return jsonify({'success': False, 'message': 'No file selected'}), 400
+            
+            # Validate file type
+            allowed_extensions = {'png', 'jpg', 'jpeg'}
+            if not '.' in file.filename or \
+               file.filename.rsplit('.', 1)[1].lower() not in allowed_extensions:
+                return jsonify({
+                    'success': False,
+                    'message': 'Invalid file type. Allowed: png, jpg, jpeg'
+                }), 400
+            
+            image_bytes = file.read()
+        
+        # Check for JSON with base64 image data
+        elif request.is_json:
+            data = request.get_json()
+            image_data = data.get('image_data')
+            if image_data:
+                # Handle base64 data URI format
+                if ',' in image_data:
+                    image_data = image_data.split(',')[1]
+                image_bytes = base64.b64decode(image_data)
+        
+        if not image_bytes:
+            return jsonify({
+                'success': False,
+                'message': 'No image provided. Send file (multipart) or image_data (base64 JSON)'
+            }), 400
+        
+        # Check file size (max 10MB)
+        max_size = 10 * 1024 * 1024
+        if len(image_bytes) > max_size:
+            return jsonify({
+                'success': False,
+                'message': 'File too large. Maximum size: 10MB'
+            }), 400
+        
+        # Run detection based on mode
+        try:
+            print(f"Running {mode} detection (threshold: {conf_threshold})...")
+            if detection_mode == DetectionMode.SPECIES:
+                detections = enhanced_yolo_service.detect_species(image_bytes, conf_threshold)
+                mode_label = "Species Monitoring"
+            else:
+                detections = enhanced_yolo_service.detect_threats(image_bytes, conf_threshold)
+                mode_label = "Threat Monitoring"
+                
+                # Check for critical threats and trigger alerts
+                critical_detections = [d for d in detections if d.get('threat_level') == 'CRITICAL']
+                if critical_detections:
+                    print(f"🚨 ALERT: {len(critical_detections)} critical threats detected!")
+                    # Trigger real-time alert to officials
+                    try:
+                        socketio.emit('critical_threat_alert', {
+                            'user_id': str(current_user['_id']),
+                            'user_name': current_user.get('name', 'Unknown'),
+                            'detections': critical_detections,
+                            'message': f'CRITICAL THREAT DETECTED: {len(critical_detections)} high-risk objects found'
+                        }, room='officials')
+                        print("✓ Critical threat alert sent to officials")
+                    except Exception as e:
+                        print(f"⚠ Failed to send critical threat alert: {e}")
+            
+            print(f"✓ {mode_label} detection complete: {len(detections)} objects detected")
+            return jsonify({
+                'success': True,
+                'mode': mode,
+                'mode_label': mode_label,
+                'detections': detections,
+                'message': f'Detected {len(detections)} objects using {mode_label}'
+            })
+        
+        except Exception as detection_error:
+            error_msg = f"Detection processing error: {type(detection_error).__name__}: {str(detection_error)}"
+            print(f"✗ {error_msg}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({
+                'success': False,
+                'detections': [],
+                'message': error_msg
+            }), 500
+    
+    except Exception as e:
+        error_msg = f"Unexpected error in enhanced detection: {type(e).__name__}: {str(e)}"
+        print(f"✗ {error_msg}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'detections': [],
+            'message': error_msg
+        }), 500
+
 @app.route('/api/yolo/detect', methods=['POST'])
 @token_required
 def detect_objects(current_user):
@@ -384,54 +605,109 @@ def submit_report(current_user):
         location = data.get('location', {})
         if location and location.get('lat') and location.get('lng'):
             try:
-                geolocator = Nominatim(user_agent="wildlife_offence_system")
-                location_data = geolocator.reverse(f"{location['lat']}, {location['lng']}")
-                location['address'] = location_data.address if location_data else "Unknown location"
-            except Exception as e:
-                print(f"Location reverse geocoding failed: {e}")
-                location['address'] = "Location not available"
+                # Enhanced location processing with accuracy validation
+                lat = float(location['lat'])
+                lng = float(location['lng'])
+                accuracy = location.get('accuracy')
+                
+                # Validate coordinates
+                if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+                    location = {
+                        'lat': lat,
+                        'lng': lng,
+                        'address': location.get('address', 'Unknown location'),
+                        'accuracy': accuracy,
+                        'error': None
+                    }
+                print(f"📍 Location processed: lat={lat}, lng={lng}, accuracy={accuracy}")
+            except Exception as loc_error:
+                print(f"⚠️ Location processing error: {loc_error}")
+                location = {
+                    'lat': 0, 
+                    'lng': 0, 
+                    'address': 'Location not available',
+                    'accuracy': None,
+                    'error': 'Invalid coordinates provided'
+                }
         else:
-            location = {'lat': 0, 'lng': 0, 'address': 'Location not available'}
+            location = {
+                'lat': 0, 
+                'lng': 0, 
+                'address': 'Location not available',
+                'accuracy': None,
+                'error': 'No coordinates provided'
+            }
+            print(f"📍 Using default location: {location['address']}")
         
-        # Analyze media with YOLOv3 AI
-        ai_analysis = None
-        yolo_detections = []  # Store YOLO detection results with bounding boxes
+        # Analyze media with Enhanced YOLO dual-mode detection
+        enhanced_detections = []  # Store enhanced detection results
+        detection_mode = None  # Initialize detection_mode
         
         if data.get('media_type') == 'image' and data.get('media_data'):
-            # Run existing YOLOv3 analysis for wildlife offences
-            try:
-                ai_analysis = analyze_media_with_yolo(data['media_data'], data.get('description', ''))
-                print(f"YOLOv3 Analysis completed: {ai_analysis}")
-            except Exception as e:
-                print(f"YOLOv3 analysis failed: {e}")
-                ai_analysis = {
-                    "offence_detected": False,
-                    "offence_type": "unknown",
-                    "severity": "Low",
-                    "confidence": 0.0,
-                    "detected_objects": [],
-                    "description": f"YOLOv3 analysis failed: {str(e)}"
-                }
+            print(f"🖼️ Processing image media type")
+            # Determine detection mode based on offence type
+            offence_type = data.get('offence_type', '')
+            print(f"🎯 Offence type: {offence_type}")
             
-            # Run new YOLO service for object detection with bounding boxes
-            if yolo_service and yolo_service.is_initialized():
+            if ENHANCED_YOLO_AVAILABLE and enhanced_yolo_service:
+                if offence_type == 'Species Monitoring':
+                    detection_mode = DetectionMode.SPECIES
+                    print("🦁 Running Species Monitoring detection...")
+                else:
+                    detection_mode = DetectionMode.THREAT
+                    print("🚨 Running Threat Monitoring detection...")
+            else:
+                print("⚠️ Enhanced YOLO service not available, skipping detection")
+                enhanced_detections = []
+            
+            # Run enhanced detection
+            if enhanced_yolo_service and enhanced_yolo_service.is_initialized():
                 try:
-                    # Decode base64 image for YOLO service
+                    print("🔍 Starting enhanced detection process...")
+                    # Decode base64 image for enhanced detection
                     image_data = data['media_data']
                     if ',' in image_data:
                         image_data = image_data.split(',')[1]
                     image_bytes = base64.b64decode(image_data)
+                    print(f"📸 Image decoded successfully, size: {len(image_bytes)} bytes")
                     
-                    # Run YOLO detection
-                    yolo_detections = yolo_service.detect_from_bytes(
-                        image_bytes,
-                        conf_threshold=0.25,
-                        iou_threshold=0.45
-                    )
-                    print(f"YOLO service detection completed: {len(yolo_detections)} objects detected")
+                    # Run detection based on mode
+                    if detection_mode == DetectionMode.SPECIES:
+                        enhanced_detections = enhanced_yolo_service.detect_species(image_bytes)
+                        print(f"🦁 Species detection completed: {len(enhanced_detections)} animals found")
+                    else:
+                        enhanced_detections = enhanced_yolo_service.detect_threats(image_bytes)
+                        print(f"🚨 Threat detection completed: {len(enhanced_detections)} threats found")
+                        
+                        # Check for critical threats
+                        critical_threats = [d for d in enhanced_detections if d.get('threat_level') == 'CRITICAL']
+                        if critical_threats:
+                            print(f"🚨 ALERT: {len(critical_threats)} CRITICAL threats detected in report submission!")
+                
                 except Exception as e:
-                    print(f"YOLO service detection failed: {e}")
-                    yolo_detections = []
+                    print(f"❌ Enhanced detection failed: {e}")
+                    enhanced_detections = []
+                    
+                    # Show detection error toast
+                    try:
+                        import toast
+                        toast.error('Detection analysis failed', {
+                            id: 'detection-error',
+                            duration: 3000,
+                            icon: '🔍'
+                        })
+                        print("✅ Detection error toast sent")
+                    except ImportError:
+                        print("⚠️ Toast notification not available (toast library not installed)")
+            else:
+                print("⚠️ Enhanced YOLO service not initialized, skipping detection")
+                enhanced_detections = []
+        else:
+            print("📝 No image media provided, skipping detection")
+        
+        print(f"🔍 Enhanced detections: {len(enhanced_detections)} found")
+        for i, det in enumerate(enhanced_detections):
+            print(f"  Detection {i+1}: {det.get('label', 'Unknown')} ({det.get('confidence', 0):.2f})")
         
         # Create report
         report = {
@@ -444,31 +720,70 @@ def submit_report(current_user):
             'media_type': data.get('media_type'),
             'media_data': data.get('media_data'),
             'location': location,
-            'ai_analysis': ai_analysis,
-            'yolo_detections': yolo_detections,  # New field for YOLO detections
+            'enhanced_detections': enhanced_detections,  # New field for enhanced detections
+            'detection_mode': detection_mode.value if detection_mode else None,
             'status': 'New',
             'severity': normalize_severity(
-                ai_analysis.get('severity') if ai_analysis else infer_severity_from_text(data.get('description', ''))
+                max([d.get('threat_level', 'LOW') for d in enhanced_detections]) if enhanced_detections else 'Low'
             ),
             'created_at': datetime.utcnow(),
             'updated_at': datetime.utcnow()
         }
         
+        print(f"📋 Report created with keys: {list(report.keys())}")
+        
+        # Override severity based on enhanced detections if available
+        if enhanced_detections:
+            max_conf = max([d.get('confidence', 0.0) for d in enhanced_detections])
+            if max_conf >= 0.8:
+                report['severity'] = "Critical"
+            elif max_conf >= 0.5:
+                report['severity'] = "Medium"
+            elif max_conf > 0:
+                report['severity'] = "Low"
+            print(f"🎯 Severity set to: {report['severity']} (max confidence: {max_conf:.2f})")
+        
         # Insert report into database
         try:
+            print(f"💾 Attempting to insert report: {report.get('title', 'Unknown')}")
+            print(f"👤 User ID: {current_user['_id']}")
+            print(f"📊 Report data keys: {list(report.keys())}")
+            print(f"🔗 MongoDB connection status: {client is not None}")
+            print(f"🗄️ Database accessible: {db is not None}")
+            
+            # Test database connection
+            try:
+                test_connection = db.command('ping')
+                print(f"✅ MongoDB ping successful: {test_connection}")
+            except Exception as db_error:
+                print(f"❌ MongoDB connection failed: {db_error}")
+                return jsonify({'message': 'Database connection failed', 'error': str(db_error)}), 500
+            
             result = reports_collection.insert_one(report)
             report['_id'] = str(result.inserted_id)
-            # Convert non-serializable fields for response only
-            if isinstance(report.get('user_id'), ObjectId):
-                report['user_id'] = str(report['user_id'])
-            if isinstance(report.get('created_at'), datetime):
-                report['created_at'] = report['created_at'].isoformat()
-            if isinstance(report.get('updated_at'), datetime):
-                report['updated_at'] = report['updated_at'].isoformat()
-            print(f"Report inserted successfully with ID: {report['_id']}")
+            
+            print(f"✅ Report inserted successfully with ID: {report['_id']}")
+            print(f"💾 MongoDB insert result: {result}")
+            
+            # Verify the report was actually inserted
+            verification = reports_collection.find_one({'_id': result.inserted_id})
+            if verification:
+                print(f"✅ Report verified in database: {verification.get('title', 'Unknown')}")
+            else:
+                print(f"❌ Report verification failed - not found in database!")
+            
         except Exception as e:
-            print(f"Database insertion failed: {e}")
-            return jsonify({'message': 'Failed to save report to database'}), 500
+            print(f"❌ Database insertion failed: {e}")
+            print(f"🔥 Error type: {type(e).__name__}")
+            print(f"🔥 Error details: {str(e)}")
+            
+            # Check if it's a MongoDB specific error
+            if "duplicate key" in str(e).lower():
+                return jsonify({'message': 'Duplicate report - already exists', 'error': str(e)}), 409
+            elif "connection" in str(e).lower():
+                return jsonify({'message': 'Database connection lost', 'error': str(e)}), 503
+            else:
+                return jsonify({'message': 'Failed to save report to database', 'error': str(e)}), 500
         
         # Emit real-time alert to officials
         try:
@@ -476,27 +791,61 @@ def submit_report(current_user):
                 'report': report,
                 'message': f'New {report["severity"]} severity report: {report["title"]}'
             }, room='officials')
-            print("Real-time alert sent to officials")
+            print("📡 Real-time alert sent to officials")
         except Exception as e:
-            print(f"Failed to send real-time alert: {e}")
+            print(f"❌ Failed to send real-time alert: {e}")
         
-        # Send email notification for critical reports
-        if report['severity'] == 'Critical':
-            try:
-                send_critical_alert(report)
-                print("Critical alert email sent")
-            except Exception as e:
-                print(f"Failed to send critical alert email: {e}")
+        print(f"🎉 Report submission completed successfully!")
         
-        # Provide a simple severity summary mapping for client displays
-        severity_band = {
-            'band': 'High' if report['severity'] == 'Critical' else ('Medium' if report['severity'] == 'Medium' else 'Low')
-        }
-        return jsonify({'message': 'Report submitted successfully', 'report': report, 'severity_summary': severity_band}), 201
+        # Show success toast notification
+        try:
+            import toast
+            toast.success('Report submitted successfully!', { 
+                'id': 'report-success',
+                'duration': 5000,
+                'icon': '🎉'
+            })
+            print("✅ Success toast notification sent")
+        except ImportError:
+            print("⚠️ Toast notification not available (toast library not installed)")
         
-    except Exception as e:
-        print(f"Report submission error: {e}")
-        return jsonify({'message': 'Failed to submit report. Please try again.'}), 500
+        return jsonify({
+            'success': True,
+            'message': 'Report submitted successfully',
+            'report_id': report['_id'],
+            'detections_count': len(enhanced_detections),
+            'severity': report['severity'],
+            'detection_summary': {
+                'total_detections': len(enhanced_detections),
+                'threat_level': max([d.get('threat_level', 'LOW') for d in enhanced_detections]) if enhanced_detections else 'LOW',
+                'detection_mode': detection_mode,
+                'critical_threats': len([d for d in enhanced_detections if d.get('threat_level') == 'CRITICAL'])
+            }
+        }), 201
+        
+    except Exception as outer_error:
+        print(f"💥 CRITICAL ERROR in submit_report: {outer_error}")
+        print(f"💥 Error type: {type(outer_error).__name__}")
+        print(f"💥 Error details: {str(outer_error)}")
+        
+        # Show error toast notification
+        try:
+            import toast
+            toast.error('Report submission failed!', {
+                'id': 'report-error',
+                'duration': 5000,
+                'icon': '❌'
+            })
+            print("✅ Error toast notification sent")
+        except ImportError:
+            print("⚠️ Toast notification not available (toast library not installed)")
+        
+        return jsonify({
+            'success': False,
+            'message': 'Report submission failed',
+            'error': str(outer_error),
+            'error_type': type(outer_error).__name__
+        })
 
 def send_critical_alert(report):
     try:
@@ -552,8 +901,9 @@ def send_status_update_email(report, new_status, notes, updated_by):
 @token_required
 def get_reports(current_user):
     try:
+        # Ensure only officials can access all reports
         if current_user['role'] != 'official':
-            return jsonify({'message': 'Unauthorized'}), 403
+            return jsonify({'message': 'Unauthorized - This endpoint is for officials only'}), 403
         
         status = request.args.get('status', 'all')
         page = int(request.args.get('page', 1))
@@ -563,15 +913,16 @@ def get_reports(current_user):
         if status != 'all':
             query['status'] = status
         
-        print(f"Fetching reports with query: {query}, page: {page}, limit: {limit}")
+        print(f"Official {current_user['name']} fetching reports with query: {query}, page: {page}, limit: {limit}")
         
         reports = list(reports_collection.find(query)
                        .sort('created_at', -1)
                        .skip((page - 1) * limit)
                        .limit(limit))
         
-        print(f"Found {len(reports)} reports")
+        print(f"Found {len(reports)} reports for official {current_user['name']}")
         
+        # Convert ObjectId to string and format dates
         for report in reports:
             report['_id'] = str(report['_id'])
             report['user_id'] = str(report['user_id'])
@@ -591,7 +942,8 @@ def get_reports(current_user):
             'reports': reports,
             'total': total,
             'page': page,
-            'pages': (total + limit - 1) // limit
+            'pages': (total + limit - 1) // limit,
+            'message': f'Successfully fetched {len(reports)} reports for official {current_user["name"]}'
         })
     except Exception as e:
         print(f"Error fetching reports: {e}")
@@ -602,16 +954,20 @@ def get_reports(current_user):
 @token_required
 def get_user_reports(current_user):
     try:
+        # Ensure only users can access their own reports
         if current_user['role'] != 'user':
-            return jsonify({'message': 'Unauthorized'}), 403
+            return jsonify({'message': 'Unauthorized - This endpoint is for users only'}), 403
         
-        print(f"Fetching reports for user: {current_user['_id']}")
+        print(f"Fetching reports for user: {current_user['_id']} ({current_user['name']})")
         
-        reports = list(reports_collection.find({'user_id': current_user['_id']})
+        # Query reports where user_id matches the logged-in user's ID
+        query = {'user_id': current_user['_id']}
+        reports = list(reports_collection.find(query)
                        .sort('created_at', -1))
         
-        print(f"Found {len(reports)} reports for user")
+        print(f"Found {len(reports)} reports for user {current_user['name']}")
         
+        # Convert ObjectId to string and format dates
         for report in reports:
             report['_id'] = str(report['_id'])
             report['user_id'] = str(report['user_id'])
@@ -624,7 +980,10 @@ def get_user_reports(current_user):
                 if isinstance(value, ObjectId):
                     report[key] = str(value)
         
-        return jsonify({'reports': reports})
+        return jsonify({
+            'reports': reports,
+            'message': f'Successfully fetched {len(reports)} reports for user {current_user["name"]}'
+        })
     except Exception as e:
         print(f"Error fetching user reports: {e}")
         return jsonify({'message': 'Failed to fetch reports', 'error': str(e)}), 500
@@ -724,61 +1083,153 @@ def update_report_status(current_user, report_id):
 @token_required
 def get_analytics(current_user):
     if current_user['role'] != 'official':
-        return jsonify({'message': 'Unauthorized'}), 403
+        return jsonify({'message': 'Unauthorized - Analytics endpoint is for officials only'}), 403
     
-    # Get date range
-    days = int(request.args.get('days', 30))
-    start_date = datetime.utcnow() - timedelta(days=days)
-    
-    # Offence frequency
-    offence_stats = list(reports_collection.aggregate([
-        {'$match': {'created_at': {'$gte': start_date}}},
-        {'$group': {'_id': '$offence_type', 'count': {'$sum': 1}}},
-        {'$sort': {'count': -1}}
-    ]))
-    
-    # Severity distribution (stored Critical/Medium/Low)
-    severity_stats = list(reports_collection.aggregate([
-        {'$match': {'created_at': {'$gte': start_date}}},
-        {'$group': {'_id': '$severity', 'count': {'$sum': 1}}},
-        {'$sort': {'count': -1}}
-    ]))
-    
-    # Daily reports
-    daily_reports = list(reports_collection.aggregate([
-        {'$match': {'created_at': {'$gte': start_date}}},
-        {'$group': {
-            '_id': {'$dateToString': {'format': '%Y-%m-%d', 'date': '$created_at'}},
-            'count': {'$sum': 1}
-        }},
-        {'$sort': {'_id': 1}}
-    ]))
-    
-    # High-risk zones
-    high_risk_zones = list(reports_collection.aggregate([
-        {'$match': {'created_at': {'$gte': start_date}, 'severity': 'Critical'}},
-        {'$group': {
-            '_id': {
-                'lat': {'$round': [{'$toDouble': '$location.lat'}, 2]},
-                'lng': {'$round': [{'$toDouble': '$location.lng'}, 2]}
-            },
-            'count': {'$sum': 1}
-        }},
-        {'$sort': {'count': -1}},
-        {'$limit': 10}
-    ]))
-    
-    return jsonify({
-        'offence_stats': offence_stats,
-        'severity_stats': severity_stats,
-        'daily_reports': daily_reports,
-        'high_risk_zones': high_risk_zones,
-        'severity_rate': {
-            'High': next((s['count'] for s in severity_stats if (s.get('_id') or '').lower() == 'critical'), 0),
-            'Medium': next((s['count'] for s in severity_stats if (s.get('_id') or '').lower() == 'medium'), 0),
-            'Low': next((s['count'] for s in severity_stats if (s.get('_id') or '').lower() == 'low'), 0),
+    try:
+        # Get date range
+        days = int(request.args.get('days', 30))
+        start_date = datetime.utcnow() - timedelta(days=days)
+        
+        print(f"Official {current_user['name']} requesting analytics for last {days} days")
+        
+        # Offence frequency
+        offence_stats = list(reports_collection.aggregate([
+            {'$match': {'created_at': {'$gte': start_date}}},
+            {'$group': {'_id': '$offence_type', 'count': {'$sum': 1}}},
+            {'$sort': {'count': -1}}
+        ]))
+        
+        # Severity distribution (stored Critical/Medium/Low)
+        severity_stats = list(reports_collection.aggregate([
+            {'$match': {'created_at': {'$gte': start_date}}},
+            {'$group': {'_id': '$severity', 'count': {'$sum': 1}}},
+            {'$sort': {'count': -1}}
+        ]))
+        
+        # Daily reports (grouped by date)
+        daily_reports = list(reports_collection.aggregate([
+            {'$match': {'created_at': {'$gte': start_date}}},
+            {'$group': {
+                '_id': {'$dateToString': {'format': '%Y-%m-%d', 'date': '$created_at'}},
+                'count': {'$sum': 1}
+            }},
+            {'$sort': {'_id': 1}}
+        ]))
+        
+        # Weekly reports (grouped by week)
+        weekly_reports = list(reports_collection.aggregate([
+            {'$match': {'created_at': {'$gte': start_date}}},
+            {'$group': {
+                '_id': {
+                    'year': {'$year': '$created_at'},
+                    'week': {'$week': '$created_at'}
+                },
+                'count': {'$sum': 1},
+                'start_date': {'$min': '$created_at'}
+            }},
+            {'$sort': {'_id.year': 1, '_id.week': 1}}
+        ]))
+        
+        # High-risk zones (areas with most critical incidents)
+        high_risk_zones = list(reports_collection.aggregate([
+            {'$match': {
+                'created_at': {'$gte': start_date},
+                'severity': 'Critical',
+                'location.lat': {'$exists': True, '$ne': 0},
+                'location.lng': {'$exists': True, '$ne': 0}
+            }},
+            {'$group': {
+                '_id': {
+                    'lat': {'$round': [{'$toDouble': '$location.lat'}, 2]},
+                    'lng': {'$round': [{'$toDouble': '$location.lng'}, 2]}
+                },
+                'count': {'$sum': 1},
+                'reports': {'$push': {
+                    'title': '$title',
+                    'offence_type': '$offence_type',
+                    'created_at': '$created_at'
+                }}
+            }},
+            {'$sort': {'count': -1}},
+            {'$limit': 20}
+        ]))
+        
+        # Detection statistics
+        total_reports = reports_collection.count_documents({'created_at': {'$gte': start_date}})
+        species_detected = reports_collection.count_documents({
+            'created_at': {'$gte': start_date},
+            'offence_type': 'Species Monitoring'
+        })
+        weapon_detections = reports_collection.count_documents({
+            'created_at': {'$gte': start_date},
+            'offence_type': {'$in': ['Poaching', 'Illegal Hunting']}
+        })
+        poacher_detections = reports_collection.count_documents({
+            'created_at': {'$gte': start_date},
+            'offence_type': {'$in': ['Poaching', 'Illegal Hunting', 'Illegal Forest Entry']}
+        })
+        
+        # Calculate severity rates
+        severity_counts = {stat['_id']: stat['count'] for stat in severity_stats}
+        severity_rate = {
+            'High': severity_counts.get('Critical', 0),
+            'Medium': severity_counts.get('Medium', 0),
+            'Low': severity_counts.get('Low', 0),
         }
-    })
+        
+        # Monthly trend analysis
+        monthly_trend = list(reports_collection.aggregate([
+            {'$match': {'created_at': {'$gte': start_date}}},
+            {'$group': {
+                '_id': {
+                    'year': {'$year': '$created_at'},
+                    'month': {'$month': '$created_at'}
+                },
+                'total': {'$sum': 1},
+                'critical': {
+                    '$sum': {'$cond': [{'$eq': ['$severity', 'Critical']}, 1, 0]}
+                },
+                'medium': {
+                    '$sum': {'$cond': [{'$eq': ['$severity', 'Medium']}, 1, 0]}
+                },
+                'low': {
+                    '$sum': {'$cond': [{'$eq': ['$severity', 'Low']}, 1, 0]}
+                }
+            }},
+            {'$sort': {'_id.year': 1, '_id.month': 1}}
+        ]))
+        
+        analytics_data = {
+            'offence_stats': offence_stats,
+            'severity_stats': severity_stats,
+            'daily_reports': daily_reports,
+            'weekly_reports': weekly_reports,
+            'monthly_trend': monthly_trend,
+            'high_risk_zones': high_risk_zones,
+            'severity_rate': severity_rate,
+            'detection_statistics': {
+                'total_reports': total_reports,
+                'species_detected': species_detected,
+                'weapon_detections': weapon_detections,
+                'poacher_detections': poacher_detections
+            },
+            'time_range': {
+                'days': days,
+                'start_date': start_date.isoformat(),
+                'end_date': datetime.utcnow().isoformat()
+            }
+        }
+        
+        print(f"Analytics generated for {current_user['name']}: {total_reports} reports, {len(high_risk_zones)} risk zones")
+        
+        return jsonify({
+            'analytics': analytics_data,
+            'message': f'Successfully generated analytics for the last {days} days'
+        })
+        
+    except Exception as e:
+        print(f"Error generating analytics: {e}")
+        return jsonify({'message': 'Failed to generate analytics', 'error': str(e)}), 500
 
 # SocketIO events
 @socketio.on('connect')

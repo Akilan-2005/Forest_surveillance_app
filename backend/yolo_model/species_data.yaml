@@ -1,0 +1,32 @@
+# Species Detection Model Configuration
+# Wildlife Species Monitoring Classes
+
+path: ../datasets/species
+train: images/train
+val: images/val
+test: images/test
+
+# Species Classes (11 animals + birds)
+names:
+  0: lion
+  1: tiger
+  2: elephant
+  3: rhino
+  4: bear
+  5: deer
+  6: zebra
+  7: cow
+  8: cat
+  9: dog
+  10: horse
+  11: bird
+
+# Model Configuration
+nc: 12  # number of classes
+
+# Training parameters (for reference)
+epochs: 100
+batch_size: 16
+imgsz: 640
+lr0: 0.01
+weight_decay: 0.0005

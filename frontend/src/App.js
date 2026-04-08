@@ -30,7 +30,13 @@ function AppContent() {
 
                     <Route path="/" element={
                         <ProtectedRoute>
-                            {user?.role === 'user' ? <UserDashboard /> : <OfficialsDashboard />}
+                            {user?.role === 'user' ? (
+                                <UserDashboard />
+                            ) : user?.role === 'official' ? (
+                                <OfficialsDashboard />
+                            ) : (
+                                <Navigate to="/login" />
+                            )}
                         </ProtectedRoute>
                     } />
 

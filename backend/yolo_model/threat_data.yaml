@@ -1,0 +1,43 @@
+# Threat Detection Model Configuration
+# Poacher and Weapon Detection Classes
+
+path: ../datasets/threats
+train: images/train
+val: images/val
+test: images/test
+
+# Threat Classes (1 human + 9 weapons)
+names:
+  0: human
+  1: gun
+  2: rifle
+  3: pistol
+  4: shotgun
+  5: knife
+  6: machete
+  7: axe
+  8: bow
+  9: arrow
+
+# Model Configuration
+nc: 10  # number of classes
+
+# Training parameters (for reference)
+epochs: 100
+batch_size: 16
+imgsz: 640
+lr0: 0.01
+weight_decay: 0.0005
+
+# Detection priority (higher = more critical)
+priority:
+  human: 10
+  gun: 9
+  rifle: 9
+  pistol: 8
+  shotgun: 8
+  knife: 6
+  machete: 6
+  axe: 6
+  bow: 5
+  arrow: 5

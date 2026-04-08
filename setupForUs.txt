@@ -1,20 +1,35 @@
 
-cd backend
-setup venv
-- python -m venv venv
-activate venv
-- venv\Scripts\activate
-- pip install -r requirements.txt
 
 cd backend
-uvicorn api_yolo:app --reload --host 0.0.0.0 --port 8000
 
-cd frontend
-- npm install
-- npm start
+# Create virtual environment
+python -m venv venv
 
-
-
+# Activate it
+venv\Scripts\activate  (Windows)
 
 
+# Install dependencies
+pip install -r requirements.txt
 
+
+
+
+│  cd backend
+│  venv\Scripts\activate
+│  python app.py
+
+
+
+│  cd backend
+│  venv\Scripts\activate
+│  uvicorn api_yolo:app --reload --host 0.0.0.0 --port 8000
+│
+
+
+└─ TERMINAL 3: React Frontend (Port 3000)
+   cd frontend
+   npm install  (first time only)
+   npm start
+   
+   

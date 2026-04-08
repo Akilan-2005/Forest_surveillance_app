@@ -73,8 +73,7 @@ class YOLOModelLoader:
         """Load class names from YAML."""
         if not self.yaml_path.exists():
             logger.warning(f"YAML not found: {self.yaml_path}, using defaults")
-            self.class_names = {0: 'exit', 1: 'fireextinguisher', 2: 'chair', 
-                              3: 'clock', 4: 'trashbin', 5: 'screen', 6: 'printer'}
+            self.class_names = {}
             return
         
         with open(self.yaml_path, 'r') as f:
@@ -190,13 +189,21 @@ class YOLOModelLoader:
         return self.detect(image, conf_threshold)
 
 
-# Global instance
-_model_loader = None
+# Global instances
+_model_loaders = {}
 
-def get_model_loader() -> YOLOModelLoader:
-    """Get or create global model loader instance."""
-    global _model_loader
-    if _model_loader is None:
-        _model_loader = YOLOModelLoader()
-        _model_loader.initialize()
-    return _model_loader
+def get_model_loader(mode: str = "threat") -> YOLOModelLoader:
+    """Get or create global model loader instance for a specific mode."""
+    global _model_loaders
+    if mode not in _model_loaders:
+        # Use yolov8n.pt for both modes - it's a universal model
+        mat_path = "yolo_model/yolov8n.mat"
+        
+        if mode == "species":
+            yaml_path = "yolo_model/species_data.yaml"
+        else:
+            yaml_path = "yolo_model/threat_data.yaml"
+            
+        _model_loaders[mode] = YOLOModelLoader(mat_path=mat_path, yaml_path=yaml_path)
+        _model_loaders[mode].initialize()
+    return _model_loaders[mode]
